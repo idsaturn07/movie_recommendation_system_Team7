@@ -1,0 +1,13 @@
+# Data folder — CSVs too large for GitHub
+data/
+
+# R junk files
+.RData
+.RDataTmp
+.RDataTmp1
+.RDataTmp2
+.Rhistory
+.Rproj.user/
+
+# R project file (optional, can remove this line if you want it on GitHub)
+*.Rproj
