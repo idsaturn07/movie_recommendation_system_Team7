@@ -4,7 +4,7 @@ library(httr)
 library(jsonlite)
 library(tm)
 
-source("utils/hybrid_model.R")
+source("scripts/02_modeling.R")
 
 model  <- build_model()
 movies <- model$movies
