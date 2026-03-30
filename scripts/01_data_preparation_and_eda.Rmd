@@ -1,0 +1,394 @@
+```{r}
+# Load required libraries
+library(dplyr)
+library(ggplot2)
+library(scales)
+library(tm)
+library(ggrepel)
+library(here)       
+```
+# STEP 1 — LOAD DATASET
+
+```{r}
+# Load dataset from CSV file
+movies <- read.csv(
+  here("data", "movies_metadata.csv"),
+  stringsAsFactors = FALSE
+)
+
+# Display first few rows in table format
+head(movies,5)
+```
+# STEP 2 — DATASET INFORMATION
+```{r}
+# Display structure — column names, types, sample values
+cat("DATASET STRUCTURE:\n")
+str(movies)
+```
+```{r}
+# Summary statistics for all columns
+cat("DATASET SUMMARY:\n")
+summary(movies)
+```
+```{r}
+# Dataset dimensions
+cat("Rows    :", nrow(movies), "\n")
+cat("Columns :", ncol(movies), "\n")
+cat("Columns :", paste(colnames(movies), collapse = ", "), "\n")
+```
+
+# STEP 3 — MISSING VALUE ANALYSIS
+
+```{r}
+missing_before <- colSums(is.na(movies))
+cat("Missing values per column (before cleaning):\n")
+print(missing_before)
+
+# Visualize missing values
+missing_df <- data.frame(
+  Column  = names(missing_before),
+  Missing = as.numeric(missing_before)
+) %>% arrange(desc(Missing)) %>% filter(Missing > 0)
+
+if (nrow(missing_df) > 0) {
+  ggplot(missing_df, aes(x = reorder(Column, Missing),
+                          y = Missing, fill = Missing)) +
+    geom_bar(stat = "identity", width = 0.7) +
+    scale_fill_gradient(low = "#fee8c8", high = "#d7301f") +
+    coord_flip() +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "none",
+          plot.title = element_text(face = "bold", size = 14)) +
+    labs(title = "Missing Values Before Cleaning",
+         x = NULL, y = "Missing Count")
+}
+ggsave(here("results", "figures", "missing_values.png"), width = 8, height = 5)
+```
+
+# STEP 4 — DATA TYPE CONVERSION
+
+```{r}
+# Identify non-numeric popularity values
+cat("NON-NUMERIC POPULARITY VALUES:\n")
+print(movies[is.na(suppressWarnings(as.numeric(movies$popularity))),
+             c("title", "popularity")])
+```
+
+```{r}
+# Filter essential columns and convert to correct types
+movies_temp <- movies %>%
+  filter(
+    !is.na(title)    & nchar(trimws(title))    > 0,
+    !is.na(genres)   & nchar(trimws(genres))   > 0,
+    !is.na(overview) & nchar(trimws(overview)) > 10
+  ) %>%
+  mutate(
+    popularity   = suppressWarnings(as.numeric(popularity)),
+    vote_average = suppressWarnings(as.numeric(vote_average)),
+    vote_count   = suppressWarnings(as.numeric(vote_count))
+  )
+
+cat("ROWS AFTER TYPE CONVERSION:", nrow(movies_temp), "\n")
+```
+```{r}
+# Check missing values after conversion
+cat("MISSING VALUES AFTER TYPE CONVERSION:\n")
+print(colSums(is.na(movies_temp)))
+```
+# STEP 5 — DATA CLEANING
+
+```{r}
+# Remove rows with invalid numeric values
+movies_clean <- movies_temp %>%
+  filter(
+    !is.na(popularity)   & popularity   >= 0,
+    !is.na(vote_average) & vote_average >= 0 & vote_average <= 10,
+    !is.na(vote_count)   & vote_count   >= 0
+  )
+
+cat("ROWS AFTER REMOVING INVALID VALUES:", nrow(movies_clean), "\n")
+cat("ROWS REMOVED                      :",
+    nrow(movies_temp) - nrow(movies_clean), "\n")
+```
+
+```{r}
+# Remove duplicate titles — keep highest vote_count
+movies_clean <- movies_clean %>%
+  arrange(desc(vote_count)) %>%
+  distinct(title, .keep_all = TRUE)
+
+cat("ROWS AFTER DEDUPLICATION:", nrow(movies_clean), "\n")
+```
+
+```{r}
+# Confirm no missing values remain
+cat("MISSING VALUES AFTER FULL CLEANING:\n")
+print(colSums(is.na(movies_clean)))
+```
+```{r}
+head(movies_clean[, 1:6])
+```
+# STEP 6 — FEATURE ENGINEERING
+
+```{r}
+# Select required columns
+
+movies_final <- movies_clean %>%
+  select(title, genres, overview, vote_average, vote_count, popularity, original_language)
+
+# Combine genres and overview for TF-IDF content feature
+movies_final$content <- paste(
+  movies_final$genres,
+  movies_final$overview
+)
+
+# Normalize numerical features using z-score scaling
+movies_final$popularity_scaled <- as.numeric(scale(movies_final$popularity))
+movies_final$rating_scaled     <- as.numeric(scale(movies_final$vote_average))
+movies_final$votes_scaled      <- as.numeric(scale(log1p(movies_final$vote_count)))
+
+# Composite score for hybrid recommendation ranking
+movies_final$final_score <-
+  movies_final$popularity_scaled +
+  movies_final$rating_scaled     +
+  movies_final$votes_scaled
+cat("FEATURE ENGINEERING COMPLETED\n\n")
+```
+```{r}
+cat("TOP 10 MOVIES BY FINAL SCORE:\n")
+
+top_movies <- movies_final %>%
+  arrange(desc(final_score)) %>%
+  select(title, popularity, vote_average, vote_count, final_score) %>%
+  head(10)
+
+print(top_movies)
+
+ggplot(top_movies, aes(x = reorder(title, final_score), y = final_score, fill = final_score)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_gradient(low = "lightblue", high = "darkblue") +
+  labs(
+    title = "Top 10 Movies by Final Score",
+    x = "Movie Title",
+    y = "Final Score"
+  ) +
+  theme_minimal()
+ggsave(here("results", "figures", "top10_final_score.png"), width = 8, height = 5)
+```
+# STEP 7 — EXPLORATORY DATA ANALYSIS
+
+```{r}
+# Distribution of vote averages
+ggplot(movies_final, aes(x = vote_average)) +
+  geom_histogram(bins = 40, fill = "#4292c6",
+                 color = "white", alpha = 0.85) +
+  theme_minimal(base_size = 12) +
+  theme(plot.title = element_text(face = "bold", size = 14)) +
+  labs(title    = "Distribution of Movie Ratings",
+       subtitle = "How ratings are distributed across all movies",
+       x = "Vote Average", y = "Count")
+ggsave(here("results", "figures", "rating_distribution.png"), width = 8, height = 5)
+```
+
+```{r}
+# Relationship between popularity and rating
+ggplot(
+  movies_final %>%
+    filter(
+      popularity > 0,
+      popularity < quantile(popularity, 0.99)
+    ),
+  aes(x = vote_average, y = popularity)
+) +
+  geom_point(aes(color = vote_average, size = vote_count), alpha = 0.4) +
+  geom_smooth(method = "loess", se = FALSE,
+              color = "#d62728", linewidth = 1) +
+  scale_color_gradientn(colors = c("#fee8c8", "#e34a33", "#7f0000")) +
+  scale_size_continuous(range = c(0.5, 6)) +
+  scale_y_log10(labels = scales::comma) +
+  theme_minimal(base_size = 12) +
+  theme(plot.title = element_text(face = "bold", size = 14)) +
+  labs(
+    title = "Popularity vs Vote Average",
+    subtitle = "Bubble size = Vote Count | Y-axis log scale",
+    x = "Vote Average",
+    y = "Popularity (log scale)",
+    color = "Rating",
+    size = "Votes"
+  )
+ggsave(here("results", "figures", "popularity_vs_rating.png"), width = 8, height = 5)
+```
+
+```{r}
+# Genre distribution — extract genre names and plot
+get_genre_list <- function(genre_str) {
+  matches <- regmatches(genre_str,
+               gregexpr("'name':\\s*'([^']+)'", genre_str))[[1]]
+  tolower(gsub("'name':\\s*'([^']+)'", "\\1", matches))
+}
+
+all_genres <- unlist(lapply(movies_final$genres, get_genre_list))
+genre_freq <- sort(table(all_genres), decreasing = TRUE)
+genre_df   <- data.frame(
+  Genre = names(genre_freq),
+  Count = as.numeric(genre_freq)
+) %>% filter(nchar(Genre) > 0) %>% head(15)
+
+ggplot(genre_df, aes(x = reorder(Genre, Count),
+                      y = Count, fill = Count)) +
+  geom_bar(stat = "identity", width = 0.72) +
+  geom_text(aes(label = Count), hjust = -0.2,
+            size = 3.2, color = "#555") +
+  scale_fill_gradientn(colors = c("#fcbba1", "#cb181d", "#67000d")) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  coord_flip() +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none",
+        plot.title = element_text(face = "bold", size = 14),
+        panel.grid.major.y = element_blank()) +
+  labs(title    = "Top 15 Movie Genres",
+       subtitle = "Number of movies per genre",
+       x = NULL, y = "Count")
+ggsave(here("results", "figures", "top15_genres.png"), width = 8, height = 5)
+```
+
+```{r}
+# Remove invalid values
+movies_filtered <- movies_final %>%
+  filter(popularity > 0)
+
+# IQR calculation
+Q1 <- quantile(movies_filtered$popularity, 0.25)
+Q3 <- quantile(movies_filtered$popularity, 0.75)
+IQR_val <- Q3 - Q1
+upper_bound <- Q3 + 1.5 * IQR_val
+
+# Select top outliers to label (avoid clutter)
+top_outliers <- movies_filtered %>%
+  filter(popularity > upper_bound) %>%
+  arrange(desc(popularity)) %>%
+  head(5)
+
+# Plot
+ggplot(movies_filtered, aes(x = "", y = popularity)) +
+  geom_boxplot(fill = "#67000d", outlier.color = "#cb181d") +
+  
+  # Label top outlier movies
+  geom_text_repel(
+    data = top_outliers,
+    aes(label = title),
+    size = 4,
+    color = "black"
+  ) +
+  
+  scale_y_log10() +
+  
+  labs(
+    title = "Boxplot of Movie Popularity with Outlier Titles",
+    x = "",
+    y = "Popularity (log scale)"
+  ) +
+  
+  theme_minimal()
+ggsave(here("results", "figures", "popularity_boxplot.png"), width = 8, height = 5)
+```
+
+
+# STEP 8 — TEXT PREPROCESSING (TF-IDF)
+
+```{r}
+# Build corpus from content column
+cat("BUILDING TF-IDF MATRIX...\n")
+corpus <- Corpus(VectorSource(movies_final$content))
+
+# Text preprocessing pipeline
+corpus <- tm_map(corpus, content_transformer(tolower))
+corpus <- tm_map(corpus, content_transformer(function(x)
+  gsub("[^a-z ]", " ", x)))
+corpus <- tm_map(corpus, content_transformer(function(x)
+  removeWords(x, c(stopwords("english"),
+                   "film", "movie", "story", "life", "one",
+                   "man", "woman", "find", "must", "will"))))
+corpus <- tm_map(corpus, content_transformer(stripWhitespace))
+
+# Build TF-IDF Document Term Matrix
+dtm <- DocumentTermMatrix(
+  corpus,
+  control = list(
+    weighting   = weightTfIdf,
+    bounds      = list(global = c(5, Inf)),
+    wordLengths = c(4, 25)
+  )
+)
+
+cat("TF-IDF MATRIX DIMENSIONS:\n")
+cat("Documents :", nrow(dtm), "\n")
+cat("Terms     :", ncol(dtm), "\n")
+```
+
+```{r}
+# Top 20 most significant TF-IDF terms
+tfidf_mat   <- as.matrix(dtm)
+term_scores <- sort(colSums(tfidf_mat), decreasing = TRUE)[1:20]
+term_df <- data.frame(
+  Term  = factor(names(term_scores),
+                 levels = names(term_scores)[order(term_scores)]),
+  Score = as.numeric(term_scores)
+)
+
+ggplot(term_df, aes(x = Term, y = Score, fill = Score)) +
+  geom_bar(stat = "identity", width = 0.72) +
+  geom_text(aes(label = round(Score, 1)),
+            hjust = -0.15, size = 3, color = "#888") +
+  scale_fill_gradientn(colors = c("#c6dbef", "#2171b5", "#08306b")) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
+  coord_flip() +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none",
+        plot.title = element_text(face = "bold", size = 14),
+        panel.grid.major.y = element_blank()) +
+  labs(title    = "Top 20 Terms by TF-IDF Score",
+       subtitle = "Most significant content words used in recommendation",
+       x = NULL, y = "TF-IDF Score")
+ggsave(here("results", "figures", "tfidf_top20_terms.png"), width = 8, height = 5)
+```
+
+# STEP 9 — FINAL DATASET SUMMARY
+
+```{r}
+# Final dataset overview
+cat(" FINAL DATASET SUMMARY \n\n")
+cat("Total Movies :", nrow(movies_final), "\n")
+cat("Columns      :", paste(colnames(movies_final), collapse = ", "), "\n\n")
+
+cat("Missing Values in Final Dataset:\n")
+print(colSums(is.na(movies_final)))
+```
+
+
+```{r}
+cat("FINAL PREPROCESSED DATASET:\n")
+
+final_preview <- movies_final %>%
+  select(title, vote_average, vote_count, popularity,original_language, final_score) %>%
+  head(10)
+
+print(final_preview)
+```
+# STEP 10 — SAVE FINAL DATASET
+
+```{r}
+# Save cleaned and engineered dataset for model building
+write.csv(
+  movies_final,
+  here("data", "movies_final.csv"),
+  row.names = FALSE
+)
+
+cat("Dataset saved successfully.\n")
+cat("Final rows:", nrow(movies_final), "\n")
+cat("Final cols:", ncol(movies_final), "\n\n")
+
+cat("FINAL DATA READY FOR MODEL BUILDING\n")
+```
