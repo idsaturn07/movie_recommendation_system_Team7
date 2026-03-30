@@ -71,7 +71,6 @@ build_model <- function() {
     tagline_text <- rep("", nrow(movies))
   }
   
-  # genres x4, keywords x2 for stronger content signal
   movies$content <- trimws(paste(
     movies$genres_clean, movies$genres_clean,
     movies$genres_clean, movies$genres_clean,
