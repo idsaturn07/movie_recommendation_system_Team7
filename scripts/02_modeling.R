@@ -6,7 +6,6 @@ parse_genre_names <- function(genre_str) {
   if (is.na(genre_str) || trimws(genre_str) == "" || genre_str == "[]")
     return(character(0))
   
-  # Match both 'name': 'Value'  AND  "name": "Value"
   matches <- regmatches(
     genre_str,
     gregexpr("['\"]name['\"]\\s*:\\s*['\"]([^'\"]+)['\"]", genre_str)
@@ -14,7 +13,6 @@ parse_genre_names <- function(genre_str) {
   
   if (length(matches) == 0) return(character(0))
   
-  # Extract just the value part after the colon
   vals <- gsub(".*['\"]name['\"]\\s*:\\s*['\"]([^'\"]+)['\"].*", "\\1", matches)
   tolower(trimws(vals))
 }
@@ -44,7 +42,7 @@ build_model <- function() {
     arrange(desc(popularity)) %>%
     slice(1:3000)
   
-  # Genre cleaning 
+  # Genre cleaning
   cat("STEP 2: CLEANING GENRES\n")
   movies$genres_clean <- sapply(movies$genres, clean_genres)
   movies$genres_list  <- lapply(movies$genres, get_genre_list)
@@ -61,32 +59,31 @@ build_model <- function() {
   overview <- ifelse(is.na(movies$overview) | movies$overview == "",
                      "", movies$overview)
   
-  # Use keywords column if it exists (same format as genres)
   if ("keywords" %in% colnames(movies)) {
     keywords_text <- sapply(movies$keywords, clean_genres)
   } else {
     keywords_text <- rep("", nrow(movies))
   }
   
-  # Use tagline if it exists
   if ("tagline" %in% colnames(movies)) {
     tagline_text <- ifelse(is.na(movies$tagline), "", movies$tagline)
   } else {
     tagline_text <- rep("", nrow(movies))
   }
   
-  # Weights: genres x2 (important but not dominant), overview x1, keywords x1
+  # genres x4, keywords x2 for stronger content signal
   movies$content <- trimws(paste(
-    movies$genres_clean, movies$genres_clean,   # genres weighted x2
-    keywords_text,                               # keyword tags
-    tagline_text,                                # tagline
-    overview                                     # full description
+    movies$genres_clean, movies$genres_clean,
+    movies$genres_clean, movies$genres_clean,
+    keywords_text, keywords_text,
+    tagline_text,
+    overview
   ))
   
   movies <- movies %>% filter(nchar(content) > 10)
   cat("Movies after content filter:", nrow(movies), "\n\n")
   
-  # TF-IDF 
+  # TF-IDF
   cat("STEP 4: BUILDING TF-IDF MATRIX\n")
   corpus <- Corpus(VectorSource(movies$content))
   corpus <- tm_map(corpus, content_transformer(tolower))
@@ -94,41 +91,43 @@ build_model <- function() {
   corpus <- tm_map(corpus, content_transformer(removeNumbers))
   corpus <- tm_map(corpus, content_transformer(function(x)
     removeWords(x, c(stopwords("english"),
-                     # Remove generic movie words that add noise
                      "film", "movie", "story", "life", "world", "man",
-                     "woman", "one", "two", "find", "must", "new", "will"))))
+                     "woman", "one", "two", "find", "must", "new", "will",
+                     "take", "make", "come", "back", "time", "year",
+                     "young", "old", "family", "help", "try", "want",
+                     "know", "live", "day", "night", "home", "away"))))
   corpus <- tm_map(corpus, content_transformer(stripWhitespace))
   
   dtm <- DocumentTermMatrix(
     corpus,
     control = list(
       weighting   = weightTfIdf,
-      wordLengths = c(3, Inf),
-      bounds      = list(global = c(2, Inf))  # FIX: was c(5, Inf)
+      wordLengths = c(3, 25),        
+      bounds      = list(global = c(2, 800))  
     )
   )
   
   tfidf <- as.matrix(dtm)
   cat("TF-IDF matrix:", nrow(tfidf), "x", ncol(tfidf), "\n\n")
   
-  # Normalisation 
+  # Normalisation
   cat("STEP 5: NORMALISING\n")
   norms <- sqrt(rowSums(tfidf^2))
   norms[norms == 0] <- 1
   tfidf_norm <- tfidf / norms
   
-  # Cosine similarity 
+  # Cosine similarity
   cat("STEP 6: COMPUTING COSINE SIMILARITY\n")
   similarity_matrix <- tfidf_norm %*% t(tfidf_norm)
   similarity_matrix[is.na(similarity_matrix)] <- 0
   similarity_matrix <- pmin(similarity_matrix, 1)
   cat("Similarity matrix ready\n\n")
   
-  #  Final score 
+  # Final score
   if (!"final_score" %in% colnames(movies)) {
-    pop_scaled    <- as.numeric(scale(log1p(movies$popularity)))
-    vote_scaled   <- as.numeric(scale(movies$vote_average))
-    count_scaled  <- as.numeric(scale(log1p(movies$vote_count)))
+    pop_scaled   <- as.numeric(scale(log1p(movies$popularity)))
+    vote_scaled  <- as.numeric(scale(movies$vote_average))
+    count_scaled <- as.numeric(scale(log1p(movies$vote_count)))
     
     movies$final_score <- pop_scaled + vote_scaled + count_scaled
     movies$final_score[is.na(movies$final_score)] <- 0
@@ -162,7 +161,7 @@ get_recommendations <- function(movie_name, model, n = 10) {
   
   query_genres   <- movies$genres_list[[idx]]
   query_language <- movies$original_language[idx]
-
+  
   if (length(query_genres) == 0) {
     cat("Warning: no genres found for", movie_name, "— using full pool\n")
     filtered_idx <- seq_len(nrow(movies))
@@ -180,16 +179,16 @@ get_recommendations <- function(movie_name, model, n = 10) {
       )
     }
     
-    # Fallback 2: use everything (shouldn't normally reach here)
+    # Fallback 2: use everything
     if (length(filtered_idx) < 15) {
       filtered_idx <- seq_len(nrow(movies))
     }
   }
   
-  #  Cosine similarity scores 
+  # Cosine similarity scores
   scores <- as.numeric(sim_matrix[idx, filtered_idx])
   
-  #  Genre similarity (Jaccard) 
+  # Genre similarity (Jaccard)
   genre_score <- sapply(filtered_idx, function(i) {
     g       <- movies$genres_list[[i]]
     overlap <- length(intersect(query_genres, g))
@@ -198,24 +197,20 @@ get_recommendations <- function(movie_name, model, n = 10) {
     overlap / uni
   })
   
-  # Normalised final_score 
+  # Normalised final_score
   fs <- as.numeric(scale(movies$final_score[filtered_idx]))
   fs[is.na(fs)] <- 0
-  # Clamp to [-2, 2] so extreme outliers (Minions) don't dominate
   fs <- pmax(pmin(fs, 2), -2)
   
-  #  Combined score 
-  # Cosine similarity carries the description/keyword signal 
-  # Genre Jaccard ensures genre match even when descriptions differ
-  # final_score gives a mild quality boost — kept small on purpose
+  # Combined score
   final_scores <- (0.55 * scores) +
     (0.40 * genre_score) +
-    (0.05 * fs)        
- 
+    (0.05 * fs)
+  
   self_pos <- which(filtered_idx == idx)
   if (length(self_pos) > 0) final_scores[self_pos] <- -Inf
   
-  # Top-N 
+  # Top-N
   top_pos <- order(final_scores, decreasing = TRUE)[seq_len(min(n, length(final_scores)))]
   result  <- movies[filtered_idx[top_pos], ]
   
@@ -225,39 +220,63 @@ get_recommendations <- function(movie_name, model, n = 10) {
   return(as.character(result$title))
 }
 
-# EVALUATE MODEL
 evaluate_model <- function(model) {
   
   sim   <- model$similarity
   tfidf <- model$tfidf
+  movies <- model$movies
   
   avg_sim   <- mean(sim, na.rm = TRUE)
   max_sim   <- max(sim,  na.rm = TRUE)
   coverage  <- sum(sim > 0, na.rm = TRUE) / length(sim)
   density   <- sum(tfidf > 0) / length(tfidf) * 100
-  precision <- sum(sim > 0.3, na.rm = TRUE) /
+  
+  # Precision based on cosine similarity
+  precision_cos <- sum(sim > 0.05, na.rm = TRUE) /
     max(sum(sim > 0, na.rm = TRUE), 1)
   
+  # Precision based on genre match (more meaningful for this model)
+  cat("Computing genre-based precision...\n")
+  sample_idx <- sample(nrow(movies), min(200, nrow(movies)))
+  genre_precision_scores <- sapply(sample_idx, function(i) {
+    query_genres <- movies$genres_list[[i]]
+    if (length(query_genres) == 0) return(NA)
+    
+    # get top 10 recommendations by cosine similarity
+    scores   <- sim[i, ]
+    scores[i] <- -Inf
+    top10    <- order(scores, decreasing = TRUE)[1:10]
+    
+    # check how many share at least 1 genre
+    matches <- sapply(top10, function(j) {
+      length(intersect(query_genres, movies$genres_list[[j]])) > 0
+    })
+    mean(matches)
+  })
+  
+  genre_precision <- mean(genre_precision_scores, na.rm = TRUE) * 100
+  
   cat("MODEL EVALUATION\n\n")
-  cat("Total movies          :", nrow(model$movies), "\n")
+  cat("Total movies          :", nrow(movies), "\n")
   cat("Vocabulary size       :", ncol(tfidf), "terms\n")
-  cat("TF-IDF density        :", round(density,    2), "%\n")
-  cat("Avg cosine similarity :", round(avg_sim,    4), "\n")
-  cat("Max cosine similarity :", round(max_sim,    4), "\n")
+  cat("TF-IDF density        :", round(density,       2), "%\n")
+  cat("Avg cosine similarity :", round(avg_sim,        4), "\n")
+  cat("Max cosine similarity :", round(max_sim,        4), "\n")
   cat("Coverage              :", round(coverage * 100, 2), "%\n")
   cat("Sparsity              :", round((1-coverage)*100, 2), "%\n")
-  cat("Precision @ 0.3       :", round(precision * 100, 2), "%\n\n")
+  cat("Precision @ 0.05      :", round(precision_cos * 100, 2), "%\n")
+  cat("Genre Precision@10    :", round(genre_precision,     2), "%\n\n")
   
-  # Genre parse sanity check
-  n_genres <- sum(sapply(model$movies$genres_list, length) > 0)
-  cat("Movies with genres    :", n_genres, "/", nrow(model$movies), "\n\n")
+  n_genres <- sum(sapply(movies$genres_list, length) > 0)
+  cat("Movies with genres    :", n_genres, "/", nrow(movies), "\n\n")
   
   return(invisible(list(
-    avg_sim   = avg_sim,
-    max_sim   = max_sim,
-    coverage  = coverage,
-    density   = density,
-    precision = precision
+    avg_sim          = avg_sim,
+    max_sim          = max_sim,
+    coverage         = coverage,
+    density          = density,
+    precision_cos    = precision_cos,
+    genre_precision  = genre_precision
   )))
 }
 
