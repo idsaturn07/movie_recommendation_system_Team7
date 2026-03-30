@@ -4,7 +4,7 @@ library(httr)
 library(jsonlite)
 library(tm)
 
-source("scripts/02_modeling.R")
+source("../scripts/02_modeling.R")
 
 model  <- build_model()
 movies <- model$movies
@@ -25,7 +25,7 @@ if (!"vote_average" %in% colnames(movies)) movies$vote_average <- 0
 if (!"vote_count"   %in% colnames(movies)) movies$vote_count   <- 0
 if (!"overview"     %in% colnames(movies)) movies$overview     <- ""
 
-TMDB_KEY <- "YOUR_API_KEY_HERE"
+TMDB_KEY <- "b41fdb9ead1c8353d106a7362fc586c1"
 
 # TMDB helpers
 tmdb_search <- function(title) {
