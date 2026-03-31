@@ -1,0 +1,11 @@
+"Metric","Value"
+"Total Movies",3000
+"Vocabulary Size (Terms)",8016
+"TF-IDF Density (%)",0.29
+"Average Cosine Similarity",0.0202
+"Max Cosine Similarity",1
+"Coverage (%)",32.3
+"Sparsity (%)",67.7
+"Precision @ 0.05 (%)",43.13
+"Genre Precision@10 (%)",90.4
+"Movies with Genres",3000
