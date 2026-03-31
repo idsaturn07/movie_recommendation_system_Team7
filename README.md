@@ -224,12 +224,12 @@ CineMatch successfully demonstrates a hybrid content-based movie recommendation 
 
 ## Contribution
 
-| Roll Number | Contribution |
-|---|---|
-| 2023BCS0129 | |
-| 2023BCS0126 | |
-| 2023BCS0066 | |
-| 2023BCS0207 | |
+| Roll Number | Name | Contribution |
+|---|---|---|
+| 2023BCS0126 | Jadi Hemarupini | Data cleaning, feature engineering — numerical scaling, composite score, dataset preparation |
+| 2023BCS0207 | Praneetha Pillai | Exploratory data analysis, text preprocessing, corpus building, visualisations |
+| 2023BCS0129 | Inchara M P | Model development — TF-IDF vectorisation, Cosine Similarity, Genre Jaccard Similarity, hybrid scoring |
+| 2023BCS0066 | Deepanjali Tudu | Model evaluation — Genre Precision@10, cosine similarity metrics, evaluation pipeline |
 
 ---
 
